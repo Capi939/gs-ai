@@ -6,8 +6,10 @@ const path=require('path');
 const fs=require('fs');
 const crypto=require('crypto');
 const app=express();
-fs.mkdirSync(path.join(__dirname,'data'),{recursive:true});
-const db=new Database(path.join(__dirname,'data','gs-ai.sqlite'));
+app.set('trust proxy',1);
+const dataDir=process.env.DATA_DIR||path.join(__dirname,'data');
+fs.mkdirSync(dataDir,{recursive:true});
+const db=new Database(path.join(dataDir,'gs-ai.sqlite'));
 db.pragma('journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password_hash TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -17,11 +19,11 @@ CREATE TABLE IF NOT EXISTS subscriptions(user_id INTEGER PRIMARY KEY,plan TEXT D
 CREATE TABLE IF NOT EXISTS usage(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,kind TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES users(id));
 `);
 app.use(express.json({limit:'1mb'}));
-app.use(session({name:'gs.sid',secret:process.env.SESSION_SECRET||crypto.randomBytes(32).toString('hex'),resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:1000*60*60*24*7}}));
+app.use(session({name:'gs.sid',secret:process.env.SESSION_SECRET||crypto.randomBytes(32).toString('hex'),proxy:true,resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:1000*60*60*24*7}}));
 app.use(express.static(path.join(__dirname,'public')));
 const auth=(req,res,next)=>req.session.userId?next():res.status(401).json({error:'Nicht angemeldet'});
-app.post('/api/auth/register',async(req,res)=>{try{const email=String(req.body.email||'').trim().toLowerCase(),name=String(req.body.name||'').trim(),password=String(req.body.password||'');if(!email||!name||password.length<8)return res.status(400).json({error:'Name, gültige E-Mail und Passwort mit mindestens 8 Zeichen erforderlich.'});const hash=await bcrypt.hash(password,12);const info=db.prepare('INSERT INTO users(email,name,password_hash) VALUES(?,?,?)').run(email,name,hash);req.session.userId=info.lastInsertRowid;db.prepare("INSERT OR IGNORE INTO subscriptions(user_id,plan,status,trial_ends_at) VALUES(?, 'trial', 'trialing', datetime('now','+14 days'))").run(info.lastInsertRowid);res.json({user:{id:info.lastInsertRowid,email,name}})}catch(e){res.status(e.code==='SQLITE_CONSTRAINT_UNIQUE'?409:500).json({error:e.code==='SQLITE_CONSTRAINT_UNIQUE'?'E-Mail bereits registriert.':'Registrierung fehlgeschlagen.'})}});
-app.post('/api/auth/login',async(req,res)=>{const email=String(req.body.email||'').trim().toLowerCase(),password=String(req.body.password||'');const u=db.prepare('SELECT * FROM users WHERE email=?').get(email);if(!u||!await bcrypt.compare(password,u.password_hash))return res.status(401).json({error:'E-Mail oder Passwort stimmt nicht.'});req.session.userId=u.id;res.json({user:{id:u.id,email:u.email,name:u.name}})});
+app.post('/api/auth/register',async(req,res)=>{try{const email=String(req.body.email||'').trim().toLowerCase(),name=String(req.body.name||'').trim(),password=String(req.body.password||'');if(!email||!name||password.length<8)return res.status(400).json({error:'Name, gültige E-Mail und Passwort mit mindestens 8 Zeichen erforderlich.'});const hash=await bcrypt.hash(password,12);const info=db.prepare('INSERT INTO users(email,name,password_hash) VALUES(?,?,?)').run(email,name,hash);req.session.userId=info.lastInsertRowid;db.prepare("INSERT OR IGNORE INTO subscriptions(user_id,plan,status,trial_ends_at) VALUES(?, 'trial', 'trialing', datetime('now','+14 days'))").run(info.lastInsertRowid);req.session.save(err=>err?res.status(500).json({error:'Session konnte nicht gespeichert werden.'}):res.json({user:{id:info.lastInsertRowid,email,name}}))}catch(e){res.status(e.code==='SQLITE_CONSTRAINT_UNIQUE'?409:500).json({error:e.code==='SQLITE_CONSTRAINT_UNIQUE'?'E-Mail bereits registriert.':'Registrierung fehlgeschlagen.'})}});
+app.post('/api/auth/login',async(req,res)=>{const email=String(req.body.email||'').trim().toLowerCase(),password=String(req.body.password||'');const u=db.prepare('SELECT * FROM users WHERE email=?').get(email);if(!u||!await bcrypt.compare(password,u.password_hash))return res.status(401).json({error:'E-Mail oder Passwort stimmt nicht.'});req.session.userId=u.id;req.session.save(err=>err?res.status(500).json({error:'Session konnte nicht gespeichert werden.'}):res.json({user:{id:u.id,email:u.email,name:u.name}}))});
 app.post('/api/auth/logout',(req,res)=>req.session.destroy(()=>res.json({ok:true})));
 app.get('/api/me',auth,(req,res)=>{const u=db.prepare('SELECT id,email,name,created_at FROM users WHERE id=?').get(req.session.userId);const sub=db.prepare('SELECT plan,status,trial_ends_at,period_ends_at FROM subscriptions WHERE user_id=?').get(req.session.userId)||{plan:'trial',status:'trialing'};const month=db.prepare("SELECT count(*) n FROM usage WHERE user_id=? AND created_at>=datetime('now','start of month')").get(req.session.userId).n;res.json({user:u,subscription:sub,usage:{month}})});
 app.get('/api/profile',auth,(req,res)=>res.json({profile:db.prepare('SELECT company,industry,location,website,services,audience,brand,phone,email FROM profiles WHERE user_id=?').get(req.session.userId)||{}}));
@@ -36,6 +38,6 @@ app.post('/api/billing/checkout',auth,(req,res)=>{const plan=String(req.body.pla
 const admin=(req,res,next)=>{const u=db.prepare('SELECT email FROM users WHERE id=?').get(req.session.userId);return u&&process.env.ADMIN_EMAIL&&u.email.toLowerCase()===process.env.ADMIN_EMAIL.toLowerCase()?next():res.status(403).json({error:'Kein Admin-Zugriff'})};
 app.get('/api/admin/stats',auth,admin,(req,res)=>{res.json({users:db.prepare('SELECT count(*) n FROM users').get().n,projects:db.prepare('SELECT count(*) n FROM projects').get().n,generations:db.prepare('SELECT count(*) n FROM usage').get().n,plans:db.prepare('SELECT plan,count(*) n FROM subscriptions GROUP BY plan').all()})});
 
-app.get('/api/health',(req,res)=>res.json({ok:true,version:'4.0.0',aiConfigured:!!process.env.OPENAI_API_KEY,database:'sqlite'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,version:'5.0.0',aiConfigured:!!process.env.OPENAI_API_KEY,database:'sqlite'}));
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
-const port=process.env.PORT||3000;app.listen(port,()=>console.log(`GS AI V4: http://localhost:${port}`));
+const port=process.env.PORT||3000;app.listen(port,()=>console.log(`GS AI V5: http://localhost:${port}`));
