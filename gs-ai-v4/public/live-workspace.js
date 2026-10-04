@@ -141,6 +141,7 @@
   cancel(){abortRun('cancelled')},
   async copy(){if(!ui.text)return;try{await navigator.clipboard.writeText(ui.text);setVoiceState('Text in die Zwischenablage kopiert.')}catch{setVoiceState('Kopieren ist hier nicht verfügbar. Markiere den Text im Ergebnis.')}},
   edit(){if(!ui.text)return;const mode=['social','ad','reply','plan','offer','chat'].includes(ui.task?.mode)?ui.task.mode:'chat';openTool(mode);$('prompt').value=$('liveTranscriptText').textContent;$('output').textContent=ui.text},
+  draft(){return {text:ui.text,view:ui.task?.view}},
   readLive,formattedResult
  };
  $('jarvisCommand').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();runJarvis()}});
