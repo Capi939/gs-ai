@@ -33,3 +33,12 @@ V4 macht aus dem MVP eine verkaufsnahe SaaS-Basis.
 
 ## Hinweis
 V4 ist ein Entwicklungs-MVP. Checkout gibt absichtlich `501` zurück, bis ein echter Zahlungsanbieter sicher serverseitig integriert wurde.
+
+
+### JARVIS pausieren
+
+Der Schalter oberhalb des Dashboards pausiert JARVIS für das angemeldete Konto. Der Zustand wird in SQLite gespeichert und bleibt nach Neustarts erhalten. Nur eine authentifizierte manuelle Änderung über `PUT /api/jarvis/control` mit `{ "paused": false }` aktiviert JARVIS wieder.
+
+Die serverseitige Sperre umfasst `/api/generate`, `/api/speech` und `/api/actions/*` (einschliesslich der Google-Aktionsrouten, sobald diese integriert sind). Gesperrte Anfragen liefern HTTP 423 und `JARVIS_PAUSED`. Laufende KI-/Sprachanfragen werden mit AbortController abgebrochen; alte Ergebnisse werden auch nach erneuter Aktivierung verworfen. Mikrofon und Audiowiedergabe werden im Browser gestoppt; andere offene Tabs prüfen den Zustand alle zwei Sekunden. Bereits an externe Dienste übermittelte Aktionen können nicht rückgängig gemacht werden. Neue Hintergrundjobs müssen denselben persistenten Kontostatus unmittelbar vor dem externen Aufruf prüfen.
+
+Regressionstest: `npm test` (temporäre Datenbank, simulierte KI, kein echter Mailversand oder Kalendertermin).
